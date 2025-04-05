@@ -1,0 +1,44 @@
+cabal-version:      3.0
+name:               pmon
+version:            0.1.0.0
+-- synopsis:
+-- description:
+license:            Apache-2.0
+license-file:       LICENSE
+author:             Fredrik Rød
+maintainer:         tilfredrik@icloud.com
+-- copyright:
+category:           System
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+executable pmon
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    ProcessInformation,
+                      TUI,
+                      Thread,
+                      CircularBuffer,
+                      Commands,
+                      Types,
+    -- other-extensions:
+    build-depends:    base ^>=4.17.2.1,
+                      brick,
+                      vty >= 6.0,
+                      vty-crossplatform,
+                      lens,
+                      text,
+                      megaparsec,
+                      attoparsec,
+                      process,
+                      containers,
+                      --ps-info,
+                      freer-simple
+    hs-source-dirs:   app,
+                      src
+    default-language: Haskell2010
+    ghc-options:      -threaded
