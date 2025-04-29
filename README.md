@@ -16,7 +16,7 @@ $com$      | orders processes by command-name
 $dec$      | sets the order direction to descending
 $asc$      | sets the order direction to ascending
 $p[pid]$   | pins/unpins process
-$d[\mu s]$ | sets the update delay (microseconds)
+$d[s]$     | sets the update delay (seconds)
 $s[pid]$   | toggles graph-view of the specified process
 $r$        | resets the settings to default
 $q$        | quits the application

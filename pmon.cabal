@@ -36,8 +36,9 @@ executable pmon
                       attoparsec,
                       process,
                       containers,
-                      --ps-info,
-                      freer-simple
+                      ps-info,
+                      freer-simple,
+                      clock,
     hs-source-dirs:   app,
                       src
     default-language: Haskell2010

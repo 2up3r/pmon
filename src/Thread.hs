@@ -1,33 +1,33 @@
 module Thread (updaterThread) where
 
-import Brick.BChan (BChan, writeBChan)
-import Control.Concurrent (threadDelay, MVar, readMVar)
+import Control.Concurrent (MVar, forkIO, killThread, takeMVar, threadDelay)
 import Control.Monad (when)
 import Control.Monad.Fix (fix)
 
+import Brick.BChan (BChan, writeBChan)
+import System.Clock (Clock (Monotonic), getTime, toNanoSecs)
+
 import Types (MicroSecond)
 
-updaterThread :: BChan a -> MVar MicroSecond -> MicroSecond -> IO a -> IO ()
-updaterThread chan delayVar delayStep op = fix $ \loop -> do
-    a <- op
-    writeBChan chan a
-    delayUpdateable delayStep delayVar
-    loop
-
-delayUpdateable :: Int -> MVar Int -> IO ()
-delayUpdateable turn delayVar = do
-    d <- readMVar delayVar
-    delayUpdateable' d d (min turn d) delayVar
-
-delayUpdateable' :: Int -> Int -> Int -> MVar Int -> IO ()
-delayUpdateable' 0 _ _ _ = pure ()
-delayUpdateable' _ 0 _ _ = pure ()
-delayUpdateable' _ _ 0 _ = pure ()
-delayUpdateable' current original step mvar = do
-    d <- readMVar mvar
-    when (d == original) $ do
-        threadDelay step
-        let remain = max 0 (current - step)
-        if remain < step
-            then delayUpdateable' remain original remain mvar
-            else delayUpdateable' remain original step mvar
+updaterThread :: BChan a -> MVar MicroSecond -> (MicroSecond -> IO a) -> IO ()
+updaterThread chan updateVar updater = do
+    initDelay <- takeMVar updateVar
+    initThreadId <- forkIO $ updaterThread' initDelay
+    _ <- fix (\loop oldThreadId -> do
+        delay <- takeMVar updateVar
+        killThread oldThreadId
+        newThreadId <- forkIO $ updaterThread' delay
+        loop newThreadId
+        ) initThreadId
+    pure ()
+    where
+        updaterThread' :: MicroSecond -> IO ()
+        updaterThread' microSec = fix $ \loop -> do
+            start <- toNanoSecs <$> getTime Monotonic
+            result <- updater microSec
+            end <- toNanoSecs <$> getTime Monotonic
+            let elapsed = fromIntegral $ end - start
+                remaining = microSec - elapsed `div` 1000
+            when (remaining > 0) $ threadDelay remaining
+            writeBChan chan result
+            loop

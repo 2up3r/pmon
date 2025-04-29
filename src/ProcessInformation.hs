@@ -1,5 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
-module ProcessInformation 
+{-# LANGUAGE OverloadedStrings, DataKinds #-}
+module ProcessInformation
     ( fetchProcesses
     , orderProcesses
     , ProcessTime
@@ -7,14 +7,17 @@ module ProcessInformation
     , ProcessOrder (..)
     ) where
 
-import Data.List (sortOn)
--- import System.Info (os)
-import System.Process (readProcess)
+import Control.Concurrent (threadDelay)
+import Data.List (sortOn, zip5)
+import Data.Maybe (fromMaybe)
 
-import qualified Data.Attoparsec.Text as A
+import Control.Monad.Freer (runM, Eff)
+import Control.Monad.Freer.Error (runError, Error)
+import PsInfo
+import qualified PsInfo.Util.Types as PI
 import qualified Data.Text as T
 
-import Types (PID, Percent, OrderDirection (..))
+import Types (PID, Percent, OrderDirection (..), MicroSecond)
 
 data ProcessTime = ProcessTime Int Int Int
     deriving (Eq, Ord)
@@ -22,7 +25,7 @@ data ProcessTime = ProcessTime Int Int Int
 instance Show ProcessTime where
     show (ProcessTime h m s) = pad ' ' 3 h <> ":" <> pad '0' 2 m <> "." <> pad '0' 2 s where
         pad :: Char -> Int -> Int -> String
-        pad p l n = let str = show n 
+        pad p l n = let str = show n
                         len = max l (length str)
                      in reverse $ take len $ reverse str <> repeat p
 
@@ -42,8 +45,6 @@ data ProcessOrder = OrderPID
                   | OrderCommand
     deriving (Eq)
 
----------- display ----------
-
 orderProcesses :: ProcessOrder -> OrderDirection -> [ProcessInfo] -> [ProcessInfo]
 orderProcesses OrderPID     d = applyOrderDirection d . sortOn piPID
 orderProcesses OrderCPU     d = applyOrderDirection d . sortOn piCPUPercent
@@ -55,62 +56,55 @@ applyOrderDirection :: OrderDirection -> [a] -> [a]
 applyOrderDirection OrderAsc = id
 applyOrderDirection OrderDec = reverse
 
----------- FETCHERS ----------
-
-fetchProcesses :: IO [ProcessInfo]
-fetchProcesses = fetchPsProcess
--- fetchProcesses = case os of
---     "darwin" -> fetchDarwinProcesses
---     "linux" -> fetchLinuxProcesses
---     _ -> pure []
-
----------- DARWIN ----------
-
--- fetchDarwinProcesses :: IO [ProcessInfo]
--- fetchDarwinProcesses = undefined
-
----------- LINUX ----------
-
--- fetchLinuxProcesses :: IO [ProcessInfo]
--- fetchLinuxProcesses = undefined
-
----------- PS ----------
-
-fetchPsProcess :: IO [ProcessInfo]
-fetchPsProcess = do
-    r <- readProcess "ps" ["-axm", "-o pid,%cpu,%mem,time,comm"] []
-    let ps = A.parse pPs $ T.pack r
-    case ps of
-        (A.Done _ ps') -> pure ps'
-        (A.Partial p) -> do
-            case p "" of
-                (A.Done _ ps') -> pure ps'
-                _ -> pure []
-        _ -> pure []
-
-pLine :: A.Parser T.Text
-pLine = A.takeTill A.isEndOfLine
-
-pInt :: A.Parser Int
-pInt = read <$> A.many' A.digit
-
-pTime :: A.Parser ProcessTime
-pTime = ProcessTime 
-    <$> pInt
-    <*> (":" *> pInt)
-    <*> ("." *> pInt)
-
-pProcess :: A.Parser ProcessInfo
-pProcess = ProcessInfo
-    <$> (A.many' A.space *> pInt)
-    <*> (A.many' A.space *> A.double)
-    <*> (A.many' A.space *> A.double)
-    <*> (A.many' A.space *> pTime)
-    <*> (A.many' A.space *> pLine)
-
-pProcesses :: A.Parser [ProcessInfo]
-pProcesses = A.sepBy pProcess A.endOfLine
-
-pPs :: A.Parser [ProcessInfo]
-pPs = pLine *> A.endOfLine
-   *> pProcesses
+fetchProcesses :: MicroSecond -> IO [ProcessInfo]
+fetchProcesses delay = do
+    epids <- runM $ runError getPIDs :: IO (Either String [PI.PID])
+    case epids of
+        (Left _) -> pure []
+        (Right pids) -> do
+            times0 <- mapM (runMaybe . getProcessTime) pids
+            ewall0 <- runM $ runError getWallTime :: IO (Either String PI.MicroSecond)
+            case ewall0 of
+                (Left _) -> pure []
+                (Right wall0) -> do
+                    threadDelay delay
+                    times1 <- mapM (runMaybe . getProcessTime) pids
+                    ewall1 <- runM $ runError getWallTime :: IO (Either String PI.MicroSecond)
+                    case ewall1 of
+                        (Left _) -> pure []
+                        (Right wall1) -> do
+                            let maybeDeltaTimes = (\(t1,t0) -> (-) <$> t1 <*> t0) <$> zip times1 times0
+                                deltaTimes = fromMaybe 0 <$> maybeDeltaTimes
+                                times = mircoSeocondsToTime . fromMaybe 0 <$> times1
+                                deltaWall = wall1 - wall0
+                                cpuUsage = (/ fromIntegral deltaWall) . fromIntegral <$> deltaTimes
+                            maybeMemUsage <- mapM (runMaybe . getProcessMemUsage) pids
+                            let memUsage = fromMaybe 0 <$> maybeMemUsage
+                            maybeNames <- mapM (runMaybe . getProcessName) pids
+                            let names = maybe "?" T.pack <$> maybeNames
+                            epids' <- runM $ runError getPIDs :: IO (Either String [PI.PID])
+                            case epids' of
+                                (Left _) -> pure []
+                                (Right pids') -> do
+                                    let infos = createProcessInfo <$> zip5 pids cpuUsage memUsage times names
+                                        infosFiltered = filter ((`elem` pids') . PI.PID . piPID) infos
+                                    pure infosFiltered
+    where
+        runMaybe :: Eff '[Error String, IO] a -> IO (Maybe a)
+        runMaybe eff = do
+            ev <- runM $ runError eff
+            case ev of
+                (Left _) -> pure Nothing
+                (Right v) -> pure $ Just v
+        mircoSeocondsToTime :: PI.MicroSecond -> ProcessTime
+        mircoSeocondsToTime mcs = 
+            let secs = mcs `div` 1000000 
+                mins = secs `div` 60
+                hrs = mins `div` 60
+            in ProcessTime 
+                (fromIntegral hrs) 
+                (fromIntegral $ mins `mod` 60) 
+                (fromIntegral $ secs `mod` 60)
+        createProcessInfo :: (PI.PID, Percent, Percent, ProcessTime, T.Text) -> ProcessInfo
+        createProcessInfo (PI.PID pid, cpu, mem, time, comm) = 
+            ProcessInfo pid cpu mem time comm

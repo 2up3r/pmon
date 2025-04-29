@@ -6,15 +6,17 @@ module TUI
     , initialDelay
     ) where
 
+import Control.Concurrent (MVar, isEmptyMVar, putMVar, takeMVar)
+import Control.Monad (unless, void)
+import Control.Monad.IO.Class (MonadIO (liftIO))
+import Data.Foldable (Foldable (toList), find)
+import Data.List (sortBy)
+
 import Brick
 import Brick.Widgets.Border (hBorder, vBorder)
-import Brick.Widgets.Table (table, renderTable, rowBorders, surroundingBorder, columnBorders)
-import Control.Concurrent (MVar, putMVar, takeMVar)
+import Brick.Widgets.Table (ColumnAlignment (AlignRight, AlignLeft), columnBorders, table, renderTable, rowBorders, setDefaultColAlignment, setColAlignment, surroundingBorder)
 import Control.Lens ((.=), (^.), over, use)
 import Control.Lens.TH (makeLenses)
-import Control.Monad.IO.Class (MonadIO (liftIO))
-import Data.Foldable (find, Foldable (toList))
-
 import qualified Brick.Widgets.Edit as E
 import qualified Data.Text as T
 import qualified Text.Megaparsec as M
@@ -25,7 +27,9 @@ import CircularBuffer
 import Commands
 import ProcessInformation
 import Types
-import Data.List (sortBy)
+
+newtype MyEvent = PSUpdate [ProcessInfo]
+    deriving (Eq)
 
 --------------- STATE ---------------
 
@@ -43,7 +47,7 @@ data State = PsList { _processes :: [ProcessInfo]
                     , _orderType :: ProcessOrder
                     , _orderDir :: OrderDirection
                     , _pinned :: S.Set PID
-                    , _delay :: MVar Int
+                    , _delay :: MVar MicroSecond
                     , _history :: CircularBuffer (Maybe ProcessInfo)
                     , _display :: Display
                     , _selected :: Maybe PID
@@ -66,9 +70,6 @@ myAppAttrMap = attrMap V.defAttr
 
 ---------- APP ----------
 
-newtype MyEvent = PSUpdate [ProcessInfo]
-    deriving (Eq)
-
 mkApp :: App State MyEvent Name
 mkApp = App
     { appDraw = mkDraw
@@ -78,7 +79,7 @@ mkApp = App
     , appAttrMap = const myAppAttrMap
     }
 
-mkInitialState :: MVar Int -> State
+mkInitialState :: MVar MicroSecond -> State
 mkInitialState delayVar = PsList
     { _processes = []
     , _editor = mkEditor
@@ -120,29 +121,38 @@ drawProcesses pins ps = renderTable
     $ rowBorders False
     $ columnBorders False
     $ surroundingBorder False
+    $ setDefaultColAlignment AlignRight
+    $ setColAlignment AlignLeft 4
     $ table $ drawProcessHeaders : ((\p -> drawProcess (piPID p `elem` pins) p) <$> ps)
 
 drawProcessHeaders :: [Widget Name]
 drawProcessHeaders =
-    [ withAttr headerAttr $ str "pid "
-    , withAttr headerAttr $ str "cpu (%) "
-    , withAttr headerAttr $ str "mem (%) "
-    , withAttr headerAttr $ str "time (h:m:s) "
-    , withAttr headerAttr $ str "comm "
+    [ withAttr headerAttr $ str "pid"
+    , withAttr headerAttr $ str " cpu (%)"
+    , withAttr headerAttr $ str " mem (%)"
+    , withAttr headerAttr $ str " time (h:m:s)"
+    , withAttr headerAttr $ str " comm"
     ]
 
 drawProcess :: Bool -> ProcessInfo -> [Widget Name]
 drawProcess pin (ProcessInfo pid cpu mem time comm) =
-    [ applyIf (withAttr pinnedAttr) pin $ str $ show pid <> " "
-    , applyIf (withAttr pinnedAttr) pin $ str $ show cpu <> " "
-    , applyIf (withAttr pinnedAttr) pin $ str $ show mem <> " "
-    , applyIf (withAttr pinnedAttr) pin $ str $ show time <> " "
-    , applyIf (withAttr pinnedAttr) pin $ str $ show comm <> " "
+    [ drawCell $ show pid
+    , drawCell $ " " <> prettyPercent cpu
+    , drawCell $ " " <> prettyPercent mem
+    , drawCell $ " " <> show time
+    , drawCell $ " " <> show comm
     ]
     where
+        drawCell :: String -> Widget Name
+        drawCell cont = applyIf (withAttr pinnedAttr) pin $ str cont
         applyIf :: (a -> a) -> Bool -> a -> a
         applyIf f True a = f a
         applyIf _ False a = a
+        prettyPercent :: Percent -> String
+        prettyPercent p =
+            let ppercent = round (p * 1000) :: Int
+                percent = fromIntegral ppercent / 10 :: Percent
+            in show percent
 
 drawDisplayGraph :: E.Editor T.Text Name -> [Maybe ProcessInfo] -> ProcessOrder -> [Widget Name]
 drawDisplayGraph edit hist ord =
@@ -222,12 +232,15 @@ handleEvent _ = pure ()
 handleCommand :: Command -> EventM Name State ()
 handleCommand CommandQuit = halt
 handleCommand (CommandDelay time) = do
-    _ <- liftIO . takeMVar =<< use delay
-    liftIO =<< putMVar <$> use delay <*> pure time
+    let time' = if time <= 0 then 1000000 else time * 1000000
+    delayVar <- use delay
+    delayEmpty <- liftIO $ isEmptyMVar delayVar
+    unless delayEmpty $ void $ liftIO $ takeMVar delayVar
+    liftIO $ putMVar delayVar time'
 handleCommand CommandReset = do
-    _ <- liftIO . takeMVar =<< use delay
-    liftIO =<< putMVar <$> use delay <*> pure initialDelay
-    initialState <- mkInitialState <$> use delay
+    delayVar <- use delay
+    liftIO $ putMVar delayVar initialDelay
+    let initialState = mkInitialState delayVar
     modify $ const initialState
 handleCommand (CommandOrderType typ) = do
     resetHistory
