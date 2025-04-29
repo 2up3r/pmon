@@ -30,6 +30,9 @@ type Parser = M.Parsec Void T.Text
 pSpaces :: Parser ()
 pSpaces = M.many (M.satisfy isSpace) $> ()
 
+pSpaces1 :: Parser ()
+pSpaces1 = M.some (M.satisfy isSpace) $> ()
+
 pCommandOrderType :: Parser Command
 pCommandOrderType = ("pid" $> CommandOrderType OrderPID)
                 <|> ("cpu" $> CommandOrderType OrderCPU)
@@ -68,4 +71,4 @@ pCommand = M.choice
     ]
 
 pCommands :: Parser [Command]
-pCommands = pSpaces *> M.sepEndBy pCommand pSpaces <* M.eof
+pCommands = pSpaces *> M.sepEndBy pCommand pSpaces1 <* M.eof
