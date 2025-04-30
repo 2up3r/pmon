@@ -8,11 +8,13 @@ module ProcessInformation
     ) where
 
 import Control.Concurrent (threadDelay)
-import Data.List (sortOn, zip5)
-import Data.Maybe (fromMaybe)
+import Control.Monad.IO.Class (MonadIO (liftIO))
+import Data.List (sortOn, zip5, zip7)
+import Data.Maybe (fromMaybe, isJust)
 
-import Control.Monad.Freer (runM, Eff)
-import Control.Monad.Freer.Error (runError, Error)
+import Control.Monad.Freer (Eff, runM)
+import Control.Monad.Freer.Error (Error, runError)
+import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 import PsInfo
 import qualified PsInfo.Util.Types as PI
 import qualified Data.Text as T
@@ -56,55 +58,55 @@ applyOrderDirection :: OrderDirection -> [a] -> [a]
 applyOrderDirection OrderAsc = id
 applyOrderDirection OrderDec = reverse
 
-fetchProcesses :: MicroSecond -> IO [ProcessInfo]
+fetchProcesses :: MicroSecond -> MaybeT IO [ProcessInfo]
 fetchProcesses delay = do
-    epids <- runM $ runError getPIDs :: IO (Either String [PI.PID])
-    case epids of
-        (Left _) -> pure []
-        (Right pids) -> do
-            times0 <- mapM (runMaybe . getProcessTime) pids
-            ewall0 <- runM $ runError getWallTime :: IO (Either String PI.MicroSecond)
-            case ewall0 of
-                (Left _) -> pure []
-                (Right wall0) -> do
-                    threadDelay delay
-                    times1 <- mapM (runMaybe . getProcessTime) pids
-                    ewall1 <- runM $ runError getWallTime :: IO (Either String PI.MicroSecond)
-                    case ewall1 of
-                        (Left _) -> pure []
-                        (Right wall1) -> do
-                            let maybeDeltaTimes = (\(t1,t0) -> (-) <$> t1 <*> t0) <$> zip times1 times0
-                                deltaTimes = fromMaybe 0 <$> maybeDeltaTimes
-                                times = mircoSeocondsToTime . fromMaybe 0 <$> times1
-                                deltaWall = wall1 - wall0
-                                cpuUsage = (/ fromIntegral deltaWall) . fromIntegral <$> deltaTimes
-                            maybeMemUsage <- mapM (runMaybe . getProcessMemUsage) pids
-                            let memUsage = fromMaybe 0 <$> maybeMemUsage
-                            maybeNames <- mapM (runMaybe . getProcessName) pids
-                            let names = maybe "?" T.pack <$> maybeNames
-                            epids' <- runM $ runError getPIDs :: IO (Either String [PI.PID])
-                            case epids' of
-                                (Left _) -> pure []
-                                (Right pids') -> do
-                                    let infos = createProcessInfo <$> zip5 pids cpuUsage memUsage times names
-                                        infosFiltered = filter ((`elem` pids') . PI.PID . piPID) infos
-                                    pure infosFiltered
+    pids0 <- MaybeT $ runMaybe getPIDs
+    times0 <- liftIO $ mapM (runMaybe . getProcessTime) pids0
+    wall0 <- MaybeT $ runMaybe getWallTime
+
+    liftIO $ threadDelay delay
+
+    pids1 <- MaybeT $ liftIO $ runMaybe getPIDs
+    times1 <- liftIO $ mapM (runMaybe . getProcessTime) pids0
+    wall1 <- MaybeT $ runMaybe getWallTime
+    maybeNames <- liftIO $ mapM (((T.pack <$>) <$>) . runMaybe . getProcessName) pids0
+    maybeMemUsage <- liftIO $ mapM (runMaybe . getProcessMemUsage) pids0
+
+    let maybeDeltaTimes = (\(t1,t0) -> (-) <$> t1 <*> t0) <$> zip times1 times0
+        deltaWall = wall1 - wall0
+        maybeCPUUsage = ((/ fromIntegral deltaWall) . fromIntegral <$>) <$> maybeDeltaTimes
+        maybeTimes = (mircoSeocondsToTime <$>) <$> times1
+
+        cpuUsage = fromMaybe 0 <$> maybeCPUUsage
+        times = fromMaybe (mircoSeocondsToTime 0) <$> maybeTimes
+        memUsage = fromMaybe 0 <$> maybeMemUsage
+        names = fromMaybe "?" <$> maybeNames
+
+        mask0 = isJust <$> maybeCPUUsage
+        mask1 = isJust <$> maybeTimes
+        mask2 = isJust <$> maybeNames
+        mask3 = isJust <$> maybeMemUsage
+        mask4 = (`elem` pids1) <$> pids0
+        mask5 = maybe False (>= 0) <$> maybeDeltaTimes
+
+        infos = createProcessInfo <$> zip5 pids0 cpuUsage memUsage times names
+        infosFiltered = [info | (info, True, True, True, True, True, True) <- zip7 infos mask0 mask1 mask2 mask3 mask4 mask5]
+    pure infosFiltered
     where
+        eitherToMaybe :: Either e a -> Maybe a
+        eitherToMaybe (Left _) = Nothing
+        eitherToMaybe (Right a) = Just a
         runMaybe :: Eff '[Error String, IO] a -> IO (Maybe a)
-        runMaybe eff = do
-            ev <- runM $ runError eff
-            case ev of
-                (Left _) -> pure Nothing
-                (Right v) -> pure $ Just v
+        runMaybe eff = eitherToMaybe <$> runM (runError eff)
         mircoSeocondsToTime :: PI.MicroSecond -> ProcessTime
-        mircoSeocondsToTime mcs = 
-            let secs = mcs `div` 1000000 
+        mircoSeocondsToTime mcs =
+            let secs = mcs `div` 1000000
                 mins = secs `div` 60
                 hrs = mins `div` 60
-            in ProcessTime 
-                (fromIntegral hrs) 
-                (fromIntegral $ mins `mod` 60) 
+            in ProcessTime
+                (fromIntegral hrs)
+                (fromIntegral $ mins `mod` 60)
                 (fromIntegral $ secs `mod` 60)
         createProcessInfo :: (PI.PID, Percent, Percent, ProcessTime, T.Text) -> ProcessInfo
-        createProcessInfo (PI.PID pid, cpu, mem, time, comm) = 
+        createProcessInfo (PI.PID pid, cpu, mem, time, comm) =
             ProcessInfo pid cpu mem time comm

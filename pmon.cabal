@@ -39,6 +39,7 @@ executable pmon
                       ps-info,
                       freer-simple,
                       clock,
+                      transformers,
     hs-source-dirs:   app,
                       src
     default-language: Haskell2010

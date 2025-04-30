@@ -62,10 +62,14 @@ headerAttr = attrName "header"
 pinnedAttr :: AttrName
 pinnedAttr = attrName "pinned"
 
+selectedAttr :: AttrName
+selectedAttr = attrName "selected"
+
 myAppAttrMap :: AttrMap
 myAppAttrMap = attrMap V.defAttr
     [ (headerAttr, fg V.blue `V.withStyle` V.bold)
     , (pinnedAttr, fg V.yellow)
+    , (selectedAttr, fg V.blue `V.withStyle` V.underline `V.withStyle` V.bold)
     ]
 
 ---------- APP ----------
@@ -105,34 +109,38 @@ drawEditor = E.renderEditor (txt . T.unlines) True
 
 mkDraw :: State -> [Widget Name]
 mkDraw st = case st ^. display of
-    DisplayOverview -> drawDisplayOverview (st ^. editor) (st ^. pinned) (st ^. processes)
+    DisplayOverview -> drawDisplayOverview (st ^. editor) (st ^. pinned) (st ^. processes) (st ^. orderType)
     DisplayGraph -> drawDisplayGraph (st ^. editor) (toList $ st ^. history) (st ^. orderType)
 
-drawDisplayOverview :: E.Editor T.Text Name -> S.Set PID -> [ProcessInfo] -> [Widget Name]
-drawDisplayOverview edit pins ps =
+drawDisplayOverview :: E.Editor T.Text Name -> S.Set PID -> [ProcessInfo] -> ProcessOrder -> [Widget Name]
+drawDisplayOverview edit pins ps order =
     [ drawEditor edit
     <=> hBorder
-    <=> drawProcesses pins ps
+    <=> drawProcesses pins ps order
     ]
 
-drawProcesses :: S.Set PID -> [ProcessInfo] -> Widget Name
-drawProcesses _ [] = str ""
-drawProcesses pins ps = renderTable
+drawProcesses :: S.Set PID -> [ProcessInfo] -> ProcessOrder -> Widget Name
+drawProcesses _ [] _ = str ""
+drawProcesses pins ps order = renderTable
     $ rowBorders False
     $ columnBorders False
     $ surroundingBorder False
     $ setDefaultColAlignment AlignRight
     $ setColAlignment AlignLeft 4
-    $ table $ drawProcessHeaders : ((\p -> drawProcess (piPID p `elem` pins) p) <$> ps)
+    $ table $ drawProcessHeaders order : ((\p -> drawProcess (piPID p `elem` pins) p) <$> ps)
 
-drawProcessHeaders :: [Widget Name]
-drawProcessHeaders =
-    [ withAttr headerAttr $ str "pid"
-    , withAttr headerAttr $ str " cpu (%)"
-    , withAttr headerAttr $ str " mem (%)"
-    , withAttr headerAttr $ str " time (h:m:s)"
-    , withAttr headerAttr $ str " comm"
+drawProcessHeaders :: ProcessOrder -> [Widget Name]
+drawProcessHeaders order =
+    [ drawCell (order == OrderPID)     "pid"
+    , padLeft (Pad 1) $ drawCell (order == OrderCPU)     "cpu(%)"
+    , padLeft (Pad 1) $ drawCell (order == OrderMemory)  "mem(%)"
+    , padLeft (Pad 1) $ drawCell (order == OrderTime)    "time(h:m.s)"
+    , padLeft (Pad 1) $ drawCell (order == OrderCommand) "comm"
     ]
+    where
+        drawCell :: Bool -> String -> Widget Name
+        drawCell sel cont = let f = if sel then withAttr selectedAttr else id
+                            in withAttr headerAttr $ f $ str cont
 
 drawProcess :: Bool -> ProcessInfo -> [Widget Name]
 drawProcess pin (ProcessInfo pid cpu mem time comm) =
@@ -162,7 +170,7 @@ drawDisplayGraph edit hist ord =
         <=> hBorder
         <=> hBox
             [ vBox
-                [ str (show $ maximum pts)
+                [ str (prettyPercent $ maximum pts)
                 , hLimit 1 (fill ' ')
                 , str "0.0"
                 ]
@@ -174,6 +182,10 @@ drawDisplayGraph edit hist ord =
         fromOrder :: ProcessOrder -> ProcessInfo -> Percent
         fromOrder OrderMemory = piMemoryPercent
         fromOrder _ = piCPUPercent
+        prettyPercent :: Percent -> String
+        prettyPercent p = let ppercent = round (p * 1000) :: Int
+                              percent = fromIntegral ppercent / 10 :: Percent
+                          in show percent
 
 drawUnscaledGraph :: RealFrac a => [a] -> Widget Name
 drawUnscaledGraph pts = Widget Greedy Greedy $ do
