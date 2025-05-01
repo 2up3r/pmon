@@ -22,7 +22,6 @@ executable pmon
     other-modules:    ProcessInformation,
                       TUI,
                       Thread,
-                      CircularBuffer,
                       Commands,
                       Types,
     -- other-extensions:

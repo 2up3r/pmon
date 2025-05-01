@@ -23,7 +23,6 @@ import qualified Text.Megaparsec as M
 import qualified Graphics.Vty as V
 import qualified Data.Set as S
 
-import CircularBuffer
 import Commands
 import ProcessInformation
 import Types
@@ -91,7 +90,7 @@ mkInitialState delayVar = PsList
     , _orderDir = OrderDec
     , _pinned = S.empty
     , _delay = delayVar
-    , _history = newCBuffer $ replicate 30 Nothing
+    , _history = CircularBuffer $ replicate 30 Nothing
     , _display = DisplayOverview
     , _selected = Nothing
     }
