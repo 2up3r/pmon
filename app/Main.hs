@@ -16,8 +16,6 @@ import TUI (MyEvent(PSUpdate), initialDelay, mkApp, mkInitialState)
 
 main :: IO ()
 main = do
-    putStrLn "Running ..."
-
     eventChan <- newBChan 10
     updaterVar <- newMVar initialDelay
     let psUpdater x = PSUpdate . fromMaybe [] <$> runMaybeT (fetchProcesses x)
@@ -27,5 +25,3 @@ main = do
     initialVty <- buildVty
     _ <- customMain initialVty buildVty (Just eventChan) mkApp initialState
     killThread threadId
-
-    putStrLn "Done"
