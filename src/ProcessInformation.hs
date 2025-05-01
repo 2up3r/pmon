@@ -7,9 +7,8 @@ module ProcessInformation
     , ProcessOrder (..)
     ) where
 
-import Control.Concurrent (threadDelay)
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Data.List (sortOn, zip5, zip7)
+import Data.List (sortOn, zip5)
 import Data.Maybe (fromMaybe, isJust)
 
 import Control.Monad.Freer (Eff, runM)
@@ -60,22 +59,13 @@ applyOrderDirection OrderDec = reverse
 
 fetchProcesses :: MicroSecond -> MaybeT IO [ProcessInfo]
 fetchProcesses delay = do
-    pids0 <- MaybeT $ runMaybe getPIDs
-    times0 <- liftIO $ mapM (runMaybe . getProcessTime) pids0
-    wall0 <- MaybeT $ runMaybe getWallTime
+    pids <- MaybeT $ runMaybe getPIDs
+    maybeCPUUsage <- MaybeT $ runMaybe $ getProcessCPUUsages pids (fromIntegral delay)
+    maybeNames <- liftIO $ mapM (((T.pack <$>) <$>) . runMaybe . getProcessName) pids
+    maybeMemUsage <- MaybeT $ runMaybe $ getProcessMemUsages pids
+    maybeCPUTimes <- MaybeT $ runMaybe $ getProcessTimes pids
 
-    liftIO $ threadDelay delay
-
-    pids1 <- MaybeT $ liftIO $ runMaybe getPIDs
-    times1 <- liftIO $ mapM (runMaybe . getProcessTime) pids0
-    wall1 <- MaybeT $ runMaybe getWallTime
-    maybeNames <- liftIO $ mapM (((T.pack <$>) <$>) . runMaybe . getProcessName) pids0
-    maybeMemUsage <- liftIO $ mapM (runMaybe . getProcessMemUsage) pids0
-
-    let maybeDeltaTimes = (\(t1,t0) -> (-) <$> t1 <*> t0) <$> zip times1 times0
-        deltaWall = wall1 - wall0
-        maybeCPUUsage = ((/ fromIntegral deltaWall) . fromIntegral <$>) <$> maybeDeltaTimes
-        maybeTimes = (mircoSeocondsToTime <$>) <$> times1
+    let maybeTimes = (mircoSeocondsToTime <$>) <$> maybeCPUTimes
 
         cpuUsage = fromMaybe 0 <$> maybeCPUUsage
         times = fromMaybe (mircoSeocondsToTime 0) <$> maybeTimes
@@ -86,11 +76,9 @@ fetchProcesses delay = do
         mask1 = isJust <$> maybeTimes
         mask2 = isJust <$> maybeNames
         mask3 = isJust <$> maybeMemUsage
-        mask4 = (`elem` pids1) <$> pids0
-        mask5 = maybe False (>= 0) <$> maybeDeltaTimes
 
-        infos = createProcessInfo <$> zip5 pids0 cpuUsage memUsage times names
-        infosFiltered = [info | (info, True, True, True, True, True, True) <- zip7 infos mask0 mask1 mask2 mask3 mask4 mask5]
+        infos = createProcessInfo <$> zip5 pids cpuUsage memUsage times names
+        infosFiltered = [info | (info, True, True, True, True) <- zip5 infos mask0 mask1 mask2 mask3]
     pure infosFiltered
     where
         eitherToMaybe :: Either e a -> Maybe a
