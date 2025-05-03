@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
 module TUI
-    ( MyEvent (PSUpdate)
+    ( MyEvent (..)
     , mkApp
     , mkInitialState
     , initialDelay

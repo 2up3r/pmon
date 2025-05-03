@@ -6,7 +6,7 @@ module Commands
     ) where
 
 import Control.Applicative (Alternative ((<|>)))
-import Data.Char (isSpace, isDigit)
+import Data.Char (isDigit, isSpace)
 import Data.Functor (($>))
 import Data.Void (Void)
 
@@ -14,7 +14,7 @@ import qualified Data.Text as T
 import qualified Text.Megaparsec as M
 
 import ProcessInformation (ProcessOrder (..))
-import Types (MicroSecond, PID, OrderDirection (..))
+import Types (MicroSecond, OrderDirection (..), PID)
 
 data Command = CommandQuit
              | CommandReset

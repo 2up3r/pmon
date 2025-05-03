@@ -18,7 +18,7 @@ import PsInfo
 import qualified PsInfo.Util.Types as PI
 import qualified Data.Text as T
 
-import Types (PID, Percent, OrderDirection (..), MicroSecond)
+import Types (OrderDirection (..), MicroSecond, Percent, PID)
 
 data ProcessTime = ProcessTime Int Int Int
     deriving (Eq, Ord)
